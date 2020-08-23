@@ -1,0 +1,1132 @@
+---
+title: "Age Cohort Comparisons"
+author: "Deric Liang"
+date: "6/24/2019"
+output:
+  pdf_document: default
+  html_notebook: default
+---
+
+# UNUSED DOCUMENT
+
+```{r results = "hide", include = FALSE}
+library(tidyverse)
+library(data.table)
+library(survey)
+library(mosaic)
+```
+
+```{r}
+# read in main data
+cididata_raw <-
+  fread("ukrmain_RU_061419.csv")
+```
+
+# Data Cleaning
+
+```{r}
+# subsetting data
+cididata_pt2 <-
+  cididata_raw %>%
+  # mental conditions
+  mutate(anx = ifelse(DSM_AGO == 1|DSM_SO == 1|DSM_GAD == 1|DSM_PDS == 1, 1, 0),
+         ied = ifelse(DSM_IEDH == 1, 1, 0),
+         aff = ifelse(DSM_MDE == 1|DSM_DYS == 1, 1, 0),
+         alc = ifelse(DSM_ALA == 1|DSM_ALD == 1, 1, 0),
+         any = ifelse(anx == 1|ied == 1|aff == 1|alc == 1, 1, 0)) %>%
+  # bromet age cohorts
+  mutate(### these cohorts not used due to simplicity of Bromet 3 cohort system
+         brom4_agecohort = cut(cididata_raw$AGE, breaks = c(16, 24, 34, 49, Inf),
+                                        labels = c("Youngest", "Middle Young", "Middle Age", "Eldest")),
+         brom3_agecohort = cut(cididata_raw$AGE, breaks = c(16, 37, 57, Inf),
+                                      labels = c("Youngest", "Middle", "Eldest"))) %>%
+  # alfonso age cohorts
+  ### these cohorts ditched; determined not to have a real advantage over Bromet 3 cohort system
+  mutate(alfonso_cohort = cut(cididata_raw$AGE, breaks = c(16, 37, 49, 64, Inf),
+                              labels = c("Youngest", "Middle Young", "Middle Age", "Eldest"))) %>%
+  # select part 2 respondents
+  filter(!is.na(de20)) %>%
+  # religion
+  mutate(de32_1 = as.factor(ifelse(is.na(de32_1), 0, 1)),
+         de32_2 = as.factor(ifelse(is.na(de32_2), 0, 1)),
+         de32_9 = as.factor(ifelse(is.na(de32_9), 0, 1)),
+         de32_98 = ifelse(is.na(de32_98), 0, 1),
+         de32_99 = ifelse(is.na(de32_99), 0, 1),
+         de32_other = ifelse(de32_3 == 1|de32_4 == 1|de32_5 == 1|de32_6 == 1|de32_7 == 1|de32_8 == 1, 1, 0),
+         de32_other = as.factor(ifelse(is.na(de32_other), 0, 1)),
+         de34 = as.factor(ifelse(de34 == 8|de34 == 9, NA, de34))) %>%
+  # suicidality
+  mutate(ideate = ifelse(!is.na(sd2), sd2, sd15),
+         plan = ifelse(!is.na(sd4), sd4, sd17),
+         attempt = ifelse(!is.na(sd6), sd6, sd19),
+         plan = ifelse(is.na(plan), 5, plan),
+         attempt = ifelse(is.na(attempt), 5, attempt),
+         ideate = as.factor(ifelse(ideate == 1, 1, 0)),
+         plan = as.factor(ifelse(plan == 1, 1, 0)),
+         attempt = as.factor(ifelse(attempt == 1, 1, 0))) %>%
+  # married
+  mutate(married = as.factor(ifelse(sc3 == 8|sc3 == 9, NA, 
+                                    ifelse(sc3 == 1, 1, 0))),
+         divorced = as.factor(ifelse(married == 0 & mr22 == 2|mr23 == 1, 1, 0)),
+         single = as.factor(ifelse(married == 0 & mr16 == 5, 1, 0)),
+         widowed = as.factor(ifelse(married == 0 & mr22 == 3|mr23 == 2, 1, 0)),
+         marital_status = derivedFactor("married" = married == 1,
+                                        "divorced" = divorced == 1,
+                                        "widowed" = widowed == 1,
+                                        "single" = single == 1,
+                                        .method = "first")) %>%
+  # chernobyl
+  mutate(live_chernobyl = as.factor(ifelse(de40 == 1, 1, 
+                                           ifelse(pt6a == 1 & !is.na(pt6a), 1,
+                                                  ifelse(pt6b == 1 & !is.na(pt6b), 1, 0))))) %>%
+  # social network
+  mutate(SN1 = derivedVariable(`0` = sn1 == 6,
+                               `1` = sn1 == 5,
+                               `2` = sn1 == 4,
+                               `3` = sn1 == 3,
+                               `4` = sn1 == 2,
+                               `5` = sn1 == 1,
+                               `7` = sn1 == 7,
+                               `8` = sn1 == 8,
+                               `9` = sn1 == 9),
+         SN2 = derivedVariable(`0` = sn2 == 6,
+                               `1` = sn2 == 5,
+                               `2` = sn2 == 4,
+                               `3` = sn2 == 3,
+                               `4` = sn2 == 2,
+                               `5` = sn2 == 1,
+                               `7` = sn2 == 7,
+                               `8` = sn2 == 8,
+                               `9` = sn2 == 9),
+         SN6 = derivedVariable("1" = sn6 == 4,
+                               "2" = sn6 == 3,
+                               "3" = sn6 == 2,
+                               "4" = sn6 == 1,
+                               "2.5" = sn6 == 8|sn6 == 9),
+         SN7 = derivedVariable("1" = sn7 == 4,
+                               "2" = sn7 == 3,
+                               "3" = sn7 == 2,
+                               "4" = sn7 == 1,
+                               "2.5" = sn7 == 8|sn7 == 9),
+         SN1 = as.numeric(ifelse(SN1 == 7|SN1 == 8|SN1 == 9, NA, SN1)),
+         SN2 = as.numeric(ifelse(SN2 == 7|SN2 == 8|SN2 == 9, NA, SN2)),
+         SN6 = as.numeric(SN6),
+         SN7 = as.numeric(SN7),
+         sn_scale = (SN1 + SN2 -2)/8) %>%
+  # financial status variable
+  mutate(fnu4 = ifelse(fnu4 == 8|fnu4 == 9, NA, fnu4),
+         financial_status = derivedFactor("very_inadequate" = fnu4 == 1,
+                                          "inadequate" = fnu4 == 2|fnu4 == 3,
+                                          "adequate" = fnu4 == 4|fnu4 == 5)) %>%
+  # chronic conditions
+  mutate(any_cc = as.factor(ifelse(cc1a == 1|cc1b == 1|cc1c == 1|cc1d == 1|cc1e == 1|
+                           cc1f == 1|cc1g == 1|cc1h == 1|cc1i == 1|cc1j == 1|
+                           cc1k == 1|cc1l == 1|cc1m == 1|cc1n == 1|cc1o == 1|
+                           cc1p == 1|cc1q == 1|cc1r == 1|cc1s == 1|cc1t == 1|
+                           cc1u == 1|cc1v == 1|cc1w == 1|cc1x == 1|cc1y == 1|
+                           cc1tz == 1, 1, 0))) %>%
+  # recode
+  mutate(cc1tz = as.factor(ifelse(cc1tz == 8|cc1tz == 9, NA, 
+                                  ifelse(cc1tz == 1, 1, 0))),
+         cc2 = as.factor(ifelse(cc2 == 8|cc2 == 9, NA, cc2)),
+         cn6 = as.factor(ifelse(cn6 == 8|cn6 == 9, NA,
+                                ifelse(cn6 == 1, 1, 0))),
+         cn6a = ifelse(cn6a == 98|cn6a == 99, NA, cn6a),
+         ch67 = as.factor(ifelse(ch67 == 8|ch67 == 9, NA,
+                                ifelse(ch67 == 1, 1, 0))),
+         ch97 = as.factor(ifelse(ch97 == 8|ch97 == 9, NA,
+                                ifelse(ch97 == 1, 1, 0))),
+         ch52 = as.factor(ifelse(ch52 == 8|ch52 == 9, NA,
+                                ifelse(ch52 == 1, 1, 0))),
+         ch82 = as.factor(ifelse(ch82 == 8|ch82 == 9, NA,
+                                ifelse(ch82 == 1, 1, 0))),
+         fnu1 = ifelse(fnu1 == 8|fnu1 == 9, NA, fnu1),
+         fnu4 = as.factor(ifelse(fnu4 == 8|fnu4 == 9, NA, fnu4)),
+         pt1 = as.factor(ifelse(pt1 == 8|pt1 == 9, NA,
+                                ifelse(pt1 == 1, 1, 0))),
+         SEX = as.factor(SEX),
+         emp = as.factor(emp),
+         io16 = as.factor(io16)) %>%
+  # select relevant variable
+  select(sampleid, brom3_agecohort, alfonso_cohort, SEX, io16, 
+         de20, fnu1, fnu4, financial_status, de32_1, de32_2, de32_other, de32_9, 
+         emp, empw, empst, emph, empr, empoth, any_cc, de34, pt6a, pt6b, de40, 
+         live_chernobyl, marital_status, sc3, mr16, mr22, mr23, sn_scale,
+         sn1, sn2, sn6, sn7, SN1, SN2, SN6, SN7, cn6, cn6a, ideate, plan, attempt, ch67, 
+         ch97, ch52, ch82, pt1, anx, alc, aff, ied, any, secu, strata, weight2)
+```
+
+```{r}
+# Dataset with Part 2 weights on
+SuicidePart2 <-
+  svydesign(ids = ~secu, strata = ~strata, weights = ~weight2, nest = T, 
+            data = subset(cididata_pt2, cididata_pt2$weight2>0))
+options(survey.lonely.psu = "adjust")
+```
+
+# Frequency Tables
+
+## Sex
+
+```{r}
+### 0 = female
+### 1 = male
+# svytable(~alfonso_cohort + SEX, design = SuicidePart2) %>% 
+#   addmargins() %>%
+#   round()
+svytable(~brom3_agecohort + SEX, design = SuicidePart2) %>% 
+  addmargins() %>%
+  round()
+```
+
+
+## Marriage 
+
+```{r}
+# marital status
+svytable(~brom3_agecohort + marital_status, design = SuicidePart2) %>% 
+  addmargins() %>%
+  round()
+```
+
+## Chronic Conditions
+
+```{r}
+# presence of any chronic condition
+# svytable(~alfonso_cohort + any_cc, design = SuicidePart2) %>% 
+#   addmargins() %>%
+#   round()
+svytable(~brom3_agecohort + any_cc, design = SuicidePart2) %>% 
+  addmargins() %>%
+  round()
+```
+
+## Socio-economic status
+
+No tables for DE20 (years of schooling) or FNU1 (total monthly income); both are continuous variables and frequency tables inherently don't make sense for them.
+
+```{r}
+# financial status
+# svytable(~alfonso_cohort + financial_status, design = SuicidePart2) %>%
+#   addmargins() %>%
+#   round()
+svytable(~brom3_agecohort + financial_status, design = SuicidePart2) %>% 
+  addmargins() %>%
+  round()
+```
+
+```{r}
+# employment status
+### 1 = working
+### 2 = student
+### 3 = homemaker
+### 4 = retired
+### 5 = other
+
+# svytable(~alfonso_cohort + emp, design = SuicidePart2) %>%
+#   addmargins() %>%
+#   round()
+svytable(~brom3_agecohort + emp, design = SuicidePart2) %>% 
+  addmargins() %>%
+  round()
+```
+
+## Urbanicity
+
+```{r}
+### 1 = rural
+### 2 = township
+### 3 = city up to 200,000 inhabitants
+### 4 = city between 200,000 and 500,000 inhabitants
+### 5 = city with more than 500,000 inhabitants
+
+# svytable(~alfonso_cohort + io16, design = SuicidePart2) %>% 
+#   addmargins() %>%
+#   round()
+svytable(~brom3_agecohort +io16, design = SuicidePart2) %>% 
+  addmargins() %>%
+  round()
+```
+
+## Proximity to Chernobyl
+
+```{r}
+# svytable(~alfonso_cohort + live_chernobyl, design = SuicidePart2) %>% 
+#   addmargins() %>%
+#   round()
+svytable(~brom3_agecohort + live_chernobyl, design = SuicidePart2) %>% 
+  addmargins() %>%
+  round()
+```
+
+## Parental Alcohol/Drug Use
+
+```{r}
+# mother alc/drug problem
+# svytable(~alfonso_cohort + ch52, design = SuicidePart2) %>% 
+#   addmargins() %>%
+#   round()
+svytable(~brom3_agecohort + ch52, design = SuicidePart2) %>% 
+  addmargins() %>%
+  round()
+```
+
+```{r}
+# father alc/drug problem
+# svytable(~alfonso_cohort + ch82, design = SuicidePart2) %>% 
+#   addmargins() %>%
+#   round()
+svytable(~brom3_agecohort + ch82, design = SuicidePart2) %>%
+  addmargins() %>%
+  round()
+```
+
+## Parental Suicidality
+
+```{r}
+# mother suicidality
+# svytable(~alfonso_cohort + ch67, design = SuicidePart2) %>%
+#   addmargins() %>%
+#   round()
+svytable(~brom3_agecohort + ch67, design = SuicidePart2) %>% 
+  addmargins() %>%
+  round()
+```
+
+```{r}
+# father suicidality
+# svytable(~alfonso_cohort + ch97, design = SuicidePart2) %>% 
+#   addmargins() %>%
+#   round()
+svytable(~brom3_agecohort + ch97, design = SuicidePart2) %>% 
+  addmargins() %>%
+  round()
+```
+
+## Abortions
+
+```{r}
+# had an abortion
+# svytable(~alfonso_cohort + cn6, design = SuicidePart2) %>% 
+#   addmargins() %>%
+#   round()
+svytable(~brom3_agecohort + cn6, design = SuicidePart2) %>% 
+  addmargins() %>%
+  round()
+```
+
+```{r}
+# number of abortions
+### continuous variable so frequency table less intuitive; just wanted to know
+# svytable(~alfonso_cohort + cn6a, design = SuicidePart2) %>% 
+#   addmargins() %>%
+#   round()
+svytable(~brom3_agecohort + cn6a, design = SuicidePart2) %>%
+  addmargins() %>%
+  round()
+```
+
+## Social Network
+
+```{r}
+# ability to rely on friends/family
+# svytable(~alfonso_cohort + sn6, design = SuicidePart2) %>% 
+#   addmargins() %>%
+#   round()
+svytable(~brom3_agecohort + sn6, design = SuicidePart2) %>% 
+  addmargins() %>%
+  round()
+```
+
+```{r}
+# ability to open up
+# svytable(~alfonso_cohort + sn6, design = SuicidePart2) %>% 
+#   addmargins() %>%
+#   round()
+svytable(~brom3_agecohort + sn6, design = SuicidePart2) %>% 
+  addmargins() %>%
+  round()
+```
+
+```{r}
+# contact with family
+# svytable(~alfonso_cohort + sn1, design = SuicidePart2) %>% 
+#   addmargins() %>%
+#   round()
+svytable(~brom3_agecohort + sn1, design = SuicidePart2) %>%
+  addmargins() %>%
+  round()
+```
+
+```{r}
+# contact with friends
+# svytable(~alfonso_cohort + sn2, design = SuicidePart2) %>% 
+#   addmargins() %>%
+#   round()
+svytable(~brom3_agecohort + sn2, design = SuicidePart2) %>% 
+  addmargins() %>%
+  round()
+```
+
+## Mental Disorders
+
+```{r}
+# affective
+# svytable(~alfonso_cohort + aff, design = SuicidePart2) %>% 
+#   addmargins() %>%
+#   round()
+svytable(~brom3_agecohort + aff, design = SuicidePart2) %>% 
+  addmargins() %>% 
+  round()
+```
+
+```{r}
+# alcohol
+# svytable(~alfonso_cohort + alc, design = SuicidePart2) %>% 
+#   addmargins() %>% 
+#   round()
+svytable(~brom3_agecohort + alc, design = SuicidePart2) %>% 
+  addmargins() %>% 
+  round()
+```
+
+```{r}
+# ied
+# svytable(~alfonso_cohort + ied, design = SuicidePart2) %>% 
+#   addmargins() %>% 
+#   round()
+svytable(~brom3_agecohort + ied, design = SuicidePart2) %>% 
+  addmargins() %>% 
+  round()
+```
+
+```{r}
+# anxiety
+# svytable(~alfonso_cohort + aff, design = SuicidePart2) %>% 
+#   addmargins() %>% 
+#   round()
+svytable(~brom3_agecohort + aff, design = SuicidePart2) %>%
+  addmargins() %>% 
+  round()
+```
+
+```{r}
+# any
+# svytable(~alfonso_cohort + any, design = SuicidePart2) %>% 
+#   addmargins() %>% 
+#   round()
+svytable(~brom3_agecohort + any, design = SuicidePart2) %>% 
+  addmargins() %>% 
+  round()
+```
+
+## Suicidality
+
+```{r}
+# ideate
+# svytable(~alfonso_cohort + ideate, design = SuicidePart2) %>% 
+#   addmargins() %>%
+#   round()
+svytable(~brom3_agecohort + ideate, design = SuicidePart2) %>% 
+  addmargins() %>%
+  round()
+```
+
+```{r}
+# plan
+# svytable(~alfonso_cohort + plan, design = SuicidePart2) %>%
+#   addmargins() %>%
+#   round()
+svytable(~brom3_agecohort + plan, design = SuicidePart2) %>% 
+  addmargins() %>%
+  round()
+```
+
+```{r}
+# attempt
+# svytable(~alfonso_cohort + attempt, design = SuicidePart2) %>%
+#   addmargins() %>%
+#   round()
+svytable(~brom3_agecohort + attempt, design = SuicidePart2) %>% 
+  addmargins() %>%
+  round()
+```
+
+```{r}
+# attempt without planning
+attemptnoplan <-
+  cididata_pt2 %>%
+  filter(attempt == 1 & plan == 0)
+svyattemptnoplan <-
+  svydesign(ids = ~secu, strata = ~strata, weights = ~weight2, nest = T, 
+            data = subset(attemptnoplan, attemptnoplan$weight2>0))
+options(survey.lonely.psu = "adjust")
+# svytable(~alfonso_cohort, design = svyattemptnoplan) %>% round()
+svytable(~brom3_agecohort, design = svyattemptnoplan) %>% 
+  addmargins() %>%
+  round()
+```
+
+```{r}
+# ideate without planning or attempting
+ideate_only <-
+  cididata_pt2 %>%
+  filter(ideate == 1 & plan == 0 & attempt == 0)
+svyideate <-
+  svydesign(ids = ~secu, strata = ~strata, weights = ~weight2, nest = T, 
+            data = subset(ideate_only, ideate_only$weight2>0))
+options(survey.lonely.psu = "adjust")
+svytable(~brom3_agecohort, design = svyideate)  %>% 
+  addmargins() %>%
+  round()
+```
+
+```{r}
+# ideate, plan, and attempt by cohort
+all3 <-
+  cididata_pt2 %>%
+  filter(ideate == 1 & plan == 1 & attempt == 1)
+svyall3 <-
+  svydesign(ids = ~secu, strata = ~strata, weights = ~weight2, nest = T, 
+            data = subset(all3, all3$weight2>0))
+options(survey.lonely.psu = "adjust")
+# svytable(~alfonso_cohort, design = svyall3) %>% round()
+svytable(~brom3_agecohort, design = svyall3) %>% 
+  addmargins() %>%
+  round()
+```
+
+## Religion
+
+### Practiced Religion
+
+```{r}
+# orthodox counts by cohort
+# svytable(~alfonso_cohort + de32_1, design = SuicidePart2) %>% 
+#   addmargins() %>%
+#   round()
+svytable(~brom3_agecohort + de32_1, design = SuicidePart2) %>% 
+  addmargins() %>%
+  round()
+```
+
+```{r}
+# uniate counts by cohort
+# svytable(~alfonso_cohort + de32_2, design = SuicidePart2) %>%
+#   addmargins() %>%
+#   round()
+svytable(~brom3_agecohort + de32_2, design = SuicidePart2) %>%
+  addmargins() %>%
+  round()
+```
+
+```{r}
+# other religion counts by cohort
+# svytable(~alfonso_cohort + de32_other, design = SuicidePart2) %>%
+#   addmargins() %>%
+#   round()
+svytable(~brom3_agecohort + de32_other, design = SuicidePart2) %>%
+  addmargins() %>%
+  round()
+```
+
+```{r}
+# no religion counts by cohort
+# svytable(~alfonso_cohort + de32_9, design = SuicidePart2) %>%
+#   addmargins() %>%
+#   round()
+svytable(~brom3_agecohort + de32_9, design = SuicidePart2) %>%
+  addmargins() %>%
+  round()
+```
+
+### Religiosity
+
+```{r}
+# religiosity counts
+# svytable(~alfonso_cohort + de34, design = SuicidePart2) %>%
+#   addmargins() %>%
+#   round()
+svytable(~brom3_agecohort + de34, design = SuicidePart2) %>%
+  addmargins() %>%
+  round()
+```
+
+# Univariate Models
+
+## Cohort
+
+```{r}
+# Bromet cohort
+svyglm(ideate~brom3_agecohort, family = quasibinomial("logit"), design = SuicidePart2) %>%
+  summary()
+svyglm(plan~brom3_agecohort, family = quasibinomial("logit"), design = SuicidePart2) %>%
+  summary()
+svyglm(attempt~brom3_agecohort, family = quasibinomial("logit"), design = SuicidePart2) %>%
+  summary()
+```
+
+## Sex
+
+```{r}
+svyglm(ideate~SEX, family = quasibinomial("logit"), design = SuicidePart2) %>%
+  summary()
+svyglm(plan~SEX, family = quasibinomial("logit"), design = SuicidePart2) %>%
+  summary()
+svyglm(attempt~SEX, family = quasibinomial("logit"), design = SuicidePart2) %>%
+  summary()
+```
+
+## Religion
+
+```{r}
+# Orthodox
+svyglm(ideate~de32_1, family = quasibinomial("logit"), design = SuicidePart2) %>%
+  summary()
+svyglm(plan~de32_1, family = quasibinomial("logit"), design = SuicidePart2) %>%
+  summary()
+svyglm(attempt~de32_1, family = quasibinomial("logit"), design = SuicidePart2) %>%
+  summary()
+```
+
+```{r}
+# Uniate
+svyglm(ideate~de32_2, family = quasibinomial("logit"), design = SuicidePart2) %>%
+  summary()
+svyglm(plan~de32_2, family = quasibinomial("logit"), design = SuicidePart2) %>%
+  summary()
+svyglm(attempt~de32_2, family = quasibinomial("logit"), design = SuicidePart2) %>%
+  summary()
+```
+
+```{r}
+# Other
+svyglm(ideate~de32_other, family = quasibinomial("logit"), design = SuicidePart2) %>%
+  summary()
+svyglm(plan~de32_other, family = quasibinomial("logit"), design = SuicidePart2) %>%
+  summary()
+svyglm(attempt~de32_other, family = quasibinomial("logit"), design = SuicidePart2) %>%
+  summary()
+```
+
+```{r}
+# None
+svyglm(ideate~de32_9, family = quasibinomial("logit"), design = SuicidePart2) %>%
+  summary()
+svyglm(plan~de32_9, family = quasibinomial("logit"), design = SuicidePart2) %>%
+  summary()
+svyglm(attempt~de32_9, family = quasibinomial("logit"), design = SuicidePart2) %>%
+  summary()
+```
+
+```{r}
+# importance of religion
+svyglm(ideate~de34, family = quasibinomial("logit"), design = SuicidePart2) %>%
+  summary()
+svyglm(plan~de34, family = quasibinomial("logit"), design = SuicidePart2) %>%
+  summary()
+svyglm(attempt~de34, family = quasibinomial("logit"), design = SuicidePart2) %>%
+  summary()
+```
+
+## Marital Status
+
+```{r}
+svyglm(ideate~marital_status, family = quasibinomial("logit"), design = SuicidePart2) %>%
+  summary()
+svyglm(plan~marital_status, family = quasibinomial("logit"), design = SuicidePart2) %>%
+  summary()
+svyglm(attempt~marital_status, family = quasibinomial("logit"), design = SuicidePart2) %>%
+  summary()
+```
+
+## Chronic Conditions
+
+```{r}
+# any chronic condition  
+svyglm(ideate~any_cc, family = quasibinomial("logit"), design = SuicidePart2) %>%
+  summary()
+svyglm(plan~any_cc, family = quasibinomial("logit"), design = SuicidePart2) %>%
+  summary()
+svyglm(attempt~any_cc, family = quasibinomial("logit"), design = SuicidePart2) %>%
+  summary()
+```
+
+## Socio-economic Status
+
+```{r}
+# Years of Education
+svyglm(ideate~de20, family = quasibinomial("logit"), design = SuicidePart2) %>%
+  summary()
+svyglm(plan~de20, family = quasibinomial("logit"), design = SuicidePart2) %>%
+  summary()
+svyglm(attempt~de20, family = quasibinomial("logit"), design = SuicidePart2) %>%
+  summary()
+```
+
+```{r}
+# monthly HH income
+### not included because this doesn't take into account allocation of income
+### per person
+# svyglm(ideate~fnu1, family = quasibinomial("logit"), design = SuicidePart2) %>%
+#   summary()
+# svyglm(plan~fnu1, family = quasibinomial("logit"), design = SuicidePart2) %>%
+#   summary()
+# svyglm(attempt~fnu1, family = quasibinomial("logit"), design = SuicidePart2) %>%
+#   summary()
+```
+
+```{r}
+# financial status
+svyglm(ideate~financial_status, family = quasibinomial("logit"), design = SuicidePart2) %>%
+  summary()
+svyglm(plan~financial_status, family = quasibinomial("logit"), design = SuicidePart2) %>%
+  summary()
+svyglm(attempt~financial_status, family = quasibinomial("logit"), design = SuicidePart2) %>%
+  summary()
+```
+
+```{r}
+# employment status
+svyglm(ideate~emp, family = quasibinomial("logit"), design = SuicidePart2) %>%
+  summary()
+svyglm(plan~emp, family = quasibinomial("logit"), design = SuicidePart2) %>%
+  summary()
+svyglm(attempt~emp, family = quasibinomial("logit"), design = SuicidePart2) %>%
+  summary()
+```
+
+## Urbanicity
+
+```{r}
+svyglm(ideate~io16, family = quasibinomial("logit"), design = SuicidePart2) %>%
+  summary()
+svyglm(plan~io16, family = quasibinomial("logit"), design = SuicidePart2) %>%
+  summary()
+svyglm(attempt~io16, family = quasibinomial("logit"), design = SuicidePart2) %>%
+  summary()
+```
+
+## Proximity to Chernobyl
+
+```{r}
+svyglm(ideate~live_chernobyl, family = quasibinomial("logit"), design = SuicidePart2) %>%
+  summary()
+svyglm(plan~live_chernobyl, family = quasibinomial("logit"), design = SuicidePart2) %>%
+  summary()
+svyglm(attempt~live_chernobyl, family = quasibinomial("logit"), design = SuicidePart2) %>%
+  summary()
+```
+
+## Parental Substance Use
+
+```{r}
+# mother
+svyglm(ideate~ch52, family = quasibinomial("logit"), design = SuicidePart2) %>%
+  summary()
+svyglm(plan~ch52, family = quasibinomial("logit"), design = SuicidePart2) %>%
+  summary()
+svyglm(attempt~ch52, family = quasibinomial("logit"), design = SuicidePart2) %>%
+  summary()
+```
+
+```{r}
+# father
+svyglm(ideate~ch82, family = quasibinomial("logit"), design = SuicidePart2) %>%
+  summary()
+svyglm(plan~ch82, family = quasibinomial("logit"), design = SuicidePart2) %>%
+  summary()
+svyglm(attempt~ch82, family = quasibinomial("logit"), design = SuicidePart2) %>%
+  summary()
+```
+
+## Parental Suicidality
+
+```{r}
+# mother
+svyglm(ideate~ch67, family = quasibinomial("logit"), design = SuicidePart2) %>%
+  summary()
+svyglm(plan~ch67, family = quasibinomial("logit"), design = SuicidePart2) %>%
+  summary()
+svyglm(attempt~ch67, family = quasibinomial("logit"), design = SuicidePart2) %>%
+  summary()
+```
+
+```{r}
+# father
+svyglm(ideate~ch97, family = quasibinomial("logit"), design = SuicidePart2) %>%
+  summary()
+svyglm(plan~ch97, family = quasibinomial("logit"), design = SuicidePart2) %>%
+  summary()
+svyglm(attempt~ch97, family = quasibinomial("logit"), design = SuicidePart2) %>%
+  summary()
+```
+
+## Abortions
+
+```{r}
+# have you ever had an abortion?
+svyglm(ideate~cn6, family = quasibinomial("logit"), design = SuicidePart2) %>%
+  summary()
+svyglm(plan~cn6, family = quasibinomial("logit"), design = SuicidePart2) %>%
+  summary()
+svyglm(attempt~cn6, family = quasibinomial("logit"), design = SuicidePart2) %>%
+  summary()
+```
+
+```{r}
+# number of abortions
+svyglm(ideate~cn6a, family = quasibinomial("logit"), design = SuicidePart2) %>%
+  summary()
+svyglm(plan~cn6a, family = quasibinomial("logit"), design = SuicidePart2) %>%
+  summary()
+svyglm(attempt~cn6a, family = quasibinomial("logit"), design = SuicidePart2) %>%
+  summary()
+```
+
+## Social Network
+
+```{r}
+# social network interaction
+svyglm(ideate~sn_scale, family = quasibinomial("logit"), design = SuicidePart2) %>%
+  summary()
+svyglm(plan~sn_scale, family = quasibinomial("logit"), design = SuicidePart2) %>%
+  summary()
+svyglm(attempt~sn_scale, family = quasibinomial("logit"), design = SuicidePart2) %>%
+  summary()
+```
+
+```{r}
+# reliance
+svyglm(ideate~SN6, family = quasibinomial("logit"), design = SuicidePart2) %>%
+  summary()
+svyglm(plan~SN6, family = quasibinomial("logit"), design = SuicidePart2) %>%
+  summary()
+svyglm(attempt~SN6, family = quasibinomial("logit"), design = SuicidePart2) %>%
+  summary()
+```
+
+```{r}
+# ability to open up
+svyglm(ideate~SN7, family = quasibinomial("logit"), design = SuicidePart2) %>%
+  summary()
+svyglm(plan~SN7, family = quasibinomial("logit"), design = SuicidePart2) %>%
+  summary()
+svyglm(attempt~SN7, family = quasibinomial("logit"), design = SuicidePart2) %>%
+  summary()
+```
+
+## Mental Disorders
+
+```{r}
+# anxiety
+svyglm(ideate~anx, family = quasibinomial("logit"), design = SuicidePart2) %>%
+  summary()
+svyglm(plan~anx, family = quasibinomial("logit"), design = SuicidePart2) %>%
+  summary()
+svyglm(attempt~anx, family = quasibinomial("logit"), design = SuicidePart2) %>%
+  summary()
+```
+
+```{r}
+# affective
+svyglm(ideate~aff, family = quasibinomial("logit"), design = SuicidePart2) %>%
+  summary()
+svyglm(plan~aff, family = quasibinomial("logit"), design = SuicidePart2) %>%
+  summary()
+svyglm(attempt~aff, family = quasibinomial("logit"), design = SuicidePart2) %>%
+  summary()
+```
+
+```{r}
+# alc
+svyglm(ideate~alc, family = quasibinomial("logit"), design = SuicidePart2) %>%
+  summary()
+svyglm(plan~alc, family = quasibinomial("logit"), design = SuicidePart2) %>%
+  summary()
+svyglm(attempt~alc, family = quasibinomial("logit"), design = SuicidePart2) %>%
+  summary()
+```
+
+```{r}
+# ied
+svyglm(ideate~ied, family = quasibinomial("logit"), design = SuicidePart2) %>%
+  summary()
+svyglm(plan~ied, family = quasibinomial("logit"), design = SuicidePart2) %>%
+  summary()
+svyglm(attempt~ied, family = quasibinomial("logit"), design = SuicidePart2) %>%
+  summary()
+```
+
+```{r}
+# any
+svyglm(ideate~any, family = quasibinomial("logit"), design = SuicidePart2) %>%
+  summary()
+svyglm(plan~any, family = quasibinomial("logit"), design = SuicidePart2) %>%
+  summary()
+svyglm(attempt~any, family = quasibinomial("logit"), design = SuicidePart2) %>%
+  summary()
+```
+
+
+
+# Multi-variate Models
+
+## Demographics
+
+### Ideate
+
+Based on significant univariate models
+
+```{r}
+# ideate
+svyglm(ideate~SEX+io16+marital_status,
+         family = quasibinomial("logit"), design = SuicidePart2) %>%
+  summary()
+```
+
+
+Full Demographics
+
+```{r}
+# ideate
+svyglm(ideate~brom3_agecohort+SEX+io16+financial_status+de32_1+de32_2+
+         de32_other+de32_9+emp+marital_status+de20,
+         family = quasibinomial("logit"), design = SuicidePart2) %>%
+  summary()
+```
+
+Eliminate Employment
+
+```{r}
+# ideate
+svyglm(ideate~brom3_agecohort+SEX+io16+financial_status+de32_1+de32_2+
+         de32_other+de32_9+marital_status+de20,
+         family = quasibinomial("logit"), design = SuicidePart2) %>%
+  summary()
+```
+
+Eliminate Uniate
+
+```{r}
+# ideate
+svyglm(ideate~brom3_agecohort+SEX+io16+financial_status+de32_1+
+         de32_other+de32_9+marital_status+de20,
+         family = quasibinomial("logit"), design = SuicidePart2) %>%
+  summary()
+```
+
+Eliminate Uniate
+
+```{r}
+# ideate
+svyglm(ideate~brom3_agecohort+SEX+io16+financial_status+de32_other+
+         de32_9+marital_status+de20,
+         family = quasibinomial("logit"), design = SuicidePart2) %>%
+  summary()
+```
+
+Eliminate Other
+
+```{r}
+# ideate
+svyglm(ideate~brom3_agecohort+SEX+io16+financial_status+de32_9+marital_status+de20,
+         family = quasibinomial("logit"), design = SuicidePart2) %>%
+  summary()
+```
+
+Eliminate No Religion
+
+```{r}
+# ideate
+svyglm(ideate~brom3_agecohort+SEX+io16+financial_status+marital_status+de20,
+         family = quasibinomial("logit"), design = SuicidePart2) %>%
+  summary()
+```
+
+Eliminate Financial Status
+
+```{r}
+# ideate
+svyglm(ideate~brom3_agecohort+SEX+io16+marital_status+de20,
+         family = quasibinomial("logit"), design = SuicidePart2) %>%
+  summary()
+```
+
+### Plan
+
+Based on significant univariate models
+
+```{r}
+# plan
+svyglm(plan~brom3_agecohort+SEX+de32_other+marital_status+financial_status,
+         family = quasibinomial("logit"), design = SuicidePart2) %>%
+  summary()
+```
+
+Refine
+
+```{r}
+# plan
+svyglm(plan~brom3_agecohort+de32_other+marital_status+financial_status,
+         family = quasibinomial("logit"), design = SuicidePart2) %>%
+  summary()
+```
+
+Full Demographics
+
+```{r}
+# plan
+svyglm(plan~brom3_agecohort+SEX+io16+financial_status+de32_1+de32_2+
+         de32_other+de32_9+emp+marital_status+de20,
+         family = quasibinomial("logit"), design = SuicidePart2) %>%
+  summary()
+```
+
+Eliminate Urbanicity
+
+```{r}
+# plan
+svyglm(plan~brom3_agecohort+SEX+financial_status+de32_1+de32_2+
+         de32_other+de32_9+emp+marital_status+de20,
+         family = quasibinomial("logit"), design = SuicidePart2) %>%
+  summary()
+```
+
+Eliminate Employment
+
+```{r}
+# plan
+svyglm(plan~brom3_agecohort+SEX+financial_status+de32_1+de32_2+
+         de32_other+de32_9+marital_status+de20,
+         family = quasibinomial("logit"), design = SuicidePart2) %>%
+  summary()
+```
+
+Eliminate Uniate
+
+```{r}
+# plan
+svyglm(plan~brom3_agecohort+SEX+financial_status+de32_1+
+         de32_other+de32_9+marital_status+de20,
+         family = quasibinomial("logit"), design = SuicidePart2) %>%
+  summary()
+```
+
+Eliminate Years of Education
+
+```{r}
+# plan
+svyglm(plan~brom3_agecohort+SEX+financial_status+de32_1+
+         de32_other+de32_9+marital_status,
+         family = quasibinomial("logit"), design = SuicidePart2) %>%
+  summary()
+```
+
+Eliminate Orthodox
+
+```{r}
+# plan
+svyglm(plan~brom3_agecohort+SEX+financial_status+de32_other+
+         de32_9+marital_status,
+         family = quasibinomial("logit"), design = SuicidePart2) %>%
+  summary()
+```
+
+Eliminate No Religion
+
+```{r}
+# plan
+svyglm(plan~brom3_agecohort+SEX+financial_status+de32_other+marital_status,
+         family = quasibinomial("logit"), design = SuicidePart2) %>%
+  summary()
+```
+
+Eliminate Sex
+
+```{r}
+# plan
+svyglm(plan~brom3_agecohort+financial_status+de32_other+marital_status,
+         family = quasibinomial("logit"), design = SuicidePart2) %>%
+  summary()
+```
+
+### Attempt
+
+Based off univariate models
+
+```{r}
+# attempt
+svyglm(attempt~brom3_agecohort+SEX+de32_2+marital_status+emp,
+         family = quasibinomial("logit"), design = SuicidePart2) %>%
+  summary()
+```
+
+Refining
+
+```{r}
+# attempt
+svyglm(attempt~brom3_agecohort+SEX+de32_2+marital_status,
+         family = quasibinomial("logit"), design = SuicidePart2) %>%
+  summary()
+```
+
+Full Demographics
+
+```{r}
+# attempt
+svyglm(attempt~brom3_agecohort+SEX+io16+financial_status+de32_1+de32_2+
+         de32_other+de32_9+emp+marital_status+de20,
+         family = quasibinomial("logit"), design = SuicidePart2) %>%
+  summary()
+```
+
+Eliminate Financial Status
+
+```{r}
+# attempt
+svyglm(attempt~brom3_agecohort+SEX+io16+de32_1+de32_2+
+         de32_other+de32_9+emp+marital_status+de20,
+         family = quasibinomial("logit"), design = SuicidePart2) %>%
+  summary()
+```
+
+Eliminate Employment
+
+```{r}
+# attempt
+svyglm(attempt~brom3_agecohort+SEX+io16+de32_1+de32_2+
+         de32_other+de32_9+marital_status+de20,
+         family = quasibinomial("logit"), design = SuicidePart2) %>%
+  summary()
+```
+
+Eliminate No Religion
+
+```{r}
+# attempt
+svyglm(attempt~brom3_agecohort+SEX+io16+de32_1+de32_2+
+         de32_other+marital_status+de20,
+         family = quasibinomial("logit"), design = SuicidePart2) %>%
+  summary()
+```
+
+Eliminate Urbanicity
+
+```{r}
+# attempt
+svyglm(attempt~brom3_agecohort+SEX+de32_1+de32_2+
+         de32_other+de32_9+marital_status+de20,
+         family = quasibinomial("logit"), design = SuicidePart2) %>%
+  summary()
+```
+
+Eliminate No Religion
+
+```{r}
+# attempt
+svyglm(attempt~brom3_agecohort+SEX+de32_1+de32_2+marital_status+de20,
+         family = quasibinomial("logit"), design = SuicidePart2) %>%
+  summary()
+```
+
